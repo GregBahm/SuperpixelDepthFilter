@@ -1,0 +1,85 @@
+﻿#pragma kernel CellSetup
+#pragma kernel PixelAssignment
+
+struct CellSetupData
+{
+	float3 Color;
+	float2 Pos;
+};
+
+int _SourceImageWidth;
+int _SourceImageHeight;
+
+RWStructuredBuffer<CellSetupData> _CellSetupBuffer;
+RWStructuredBuffer<float2> _CellStartingPoints;
+Texture2D SourceImage;
+SamplerState samplerSourceImage;
+
+[numthreads(64,1,1)]
+void CellSetup (uint3 id : SV_DispatchThreadID)
+{
+	float xOffset = 1.0 / _SourceImageWidth;
+	float yOffset = 1.0 / _SourceImageWidth;
+	float2 uvs = _CellStartingPoints[id.x];
+	float4 val = SourceImage.SampleLevel(samplerSourceImage, uvs, 0);
+
+	//TODO: Sample neighbors and ease it away from edges.
+
+	CellSetupData ret;
+	ret.Color = val.xyz; 
+	ret.Pos = uvs;
+	_CellSetupBuffer[id.x] = ret;
+}
+
+struct CellsAroundPixel
+{
+	int Cells[9];
+};
+
+RWStructuredBuffer<CellsAroundPixel> _CellsAroundPixelBuffer;
+RWStructuredBuffer<int> _ResultsBuffer;
+
+float2 IndexToUvs(uint index)
+{
+	int y = (index / _SourceImageWidth) % _SourceImageHeight;
+	int x = index % _SourceImageWidth;
+	float retX = (float)x / _SourceImageWidth;
+	float retY = (float)y / _SourceImageHeight;
+	return float2(retX, retY);
+}
+
+float GetDist(float2 pixelPos, float3 pixelVal, CellSetupData cellData)
+{
+	float pixelDist = length(pixelVal - cellData.Color);
+	pixelDist = pow(pixelDist, 1);
+	float posDist = length(pixelPos - cellData.Pos);
+	return  posDist + pixelDist; // TODO: tune this relationship;
+}
+
+[numthreads(64, 1, 1)]
+void CellDepthAverage(uint3 id : SV_DispatchThreadID)
+{
+	// Sample the 
+}
+
+[numthreads(64, 1, 1)]
+void PixelAssignment(uint3 id : SV_DispatchThreadID)
+{
+	CellsAroundPixel cellsAroundMe = _CellsAroundPixelBuffer[id.x];
+	float2 uvs = IndexToUvs(id.x);
+	float4 pixelVal = SourceImage.SampleLevel(samplerSourceImage, uvs, 0);
+	float closestDist = 10000;
+	int winningCell = 0;
+	for (int i = 0; i < 9; i++)
+	{
+		int cellIndex = cellsAroundMe.Cells[i];
+		CellSetupData cellData = _CellSetupBuffer[cellIndex];
+		float dist = GetDist(uvs, pixelVal.xyz, cellData);
+		if (dist < closestDist)
+		{
+			closestDist = dist;
+			winningCell = cellIndex;
+		}
+	}
+	_ResultsBuffer[id.x] = winningCell;
+}

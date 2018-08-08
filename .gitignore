@@ -1,0 +1,14 @@
+/Library/
+/Temp/
+/obj/Debug/
+/UnityPackageManager/
+/Assembly-CSharp.csproj
+/SuperpixelDepthFilter.csproj
+/SuperpixelDepthFilter.Editor.csproj
+/SuperpixelDepthFilter.Plugins.csproj
+/SuperpixelDepthFilter.sln
+/Packages/
+/SourceArt/
+/.vs/
+/Unity.PackageManagerUI.Editor.csproj
+*.csproj
