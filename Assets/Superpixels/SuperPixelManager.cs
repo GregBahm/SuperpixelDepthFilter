@@ -22,6 +22,7 @@ public class SuperPixelManager : MonoBehaviour
 
     private int _cellSetupKernel;
     private int _pixelAssignmentKernel;
+    private int _clearDepthKernel;
     private const int GroupSize = 64;
 
     private ComputeBuffer _cellsAroundPixelBuffer;
@@ -30,8 +31,8 @@ public class SuperPixelManager : MonoBehaviour
     private ComputeBuffer _cellStartingPoints;
     private const int CellStartingPointsStride = sizeof(float) * 2;
 
-    private ComputeBuffer _cellSetupBuffer;
-    private const int CellSetupStride = sizeof(float) * 3 // Color
+    private ComputeBuffer _cellBasisBuffer;
+    private const int CellBasisStride = sizeof(float) * 3 // Color
         + sizeof(float) * 2; // X and Y
 
     private ComputeBuffer _resultsBuffer;
@@ -43,6 +44,10 @@ public class SuperPixelManager : MonoBehaviour
     public ComputeBuffer _depthMappingBuffer;
     private const int DepthMappingStride = sizeof(float) * 2;
     DepthSpacePoint[] _depthPoints;
+
+    public ComputeBuffer _cellDepthsBuffer;
+    private const int CellDepthsStride = sizeof(int) // Total Depth
+        + sizeof(int); // Pixels in Cell
 
     struct CellsAroundPixel
     {
@@ -57,10 +62,16 @@ public class SuperPixelManager : MonoBehaviour
         public int DownRight;
     }
     
-    struct CellSetupData
+    struct CellBasisData
     {
         public Vector3 Color;
         public Vector2 Pos;
+    }
+
+    struct CellDepthData
+    {
+        public int TotalDepth;
+        public int PixelsInCell;
     }
 
 	void Start ()
@@ -71,15 +82,17 @@ public class SuperPixelManager : MonoBehaviour
         _sourceImageHeight = _sourceTexture.height;
         _depthPoints = _kinectDataSource.GetDepthCoordinates();
 
+        _clearDepthKernel = Compute.FindKernel("ClearDepthData");
         _cellSetupKernel = Compute.FindKernel("CellSetup");
         _pixelAssignmentKernel = Compute.FindKernel("PixelAssignment");
 
         _cellsAroundPixelBuffer = GetCellsAroundPixelBuffer();
         _cellStartingPoints = GetCellStartingPoints();
-        _cellSetupBuffer = new ComputeBuffer(CellCount, CellSetupStride);
+        _cellBasisBuffer = new ComputeBuffer(CellCount, CellBasisStride);
         _resultsBuffer = new ComputeBuffer(SourceImageResolution, ResultsBufferStride);
         _depthDataBuffer = new ComputeBuffer(DepthImageResolution, DepthBufferStride);
         _depthMappingBuffer = new ComputeBuffer(_depthPoints.Length, DepthMappingStride);
+        _cellDepthsBuffer = new ComputeBuffer(CellCount, CellDepthsStride);
     }
 
     private ComputeBuffer GetCellStartingPoints()
@@ -102,13 +115,14 @@ public class SuperPixelManager : MonoBehaviour
 
     void Update()
     {
+        DoClearDepthBuffer();
         DoCellSetup();
         DoPixelAssignment();
 
         _depthMappingBuffer.SetData(_depthPoints);
         _depthDataBuffer.SetData(Array.ConvertAll(_kinectDataSource.GetData(), Convert.ToInt32));
 
-        Mat.SetBuffer("_CellSetupBuffer", _cellSetupBuffer);
+        Mat.SetBuffer("_CellBasisBuffer", _cellBasisBuffer);
         Mat.SetBuffer("_ResultsBuffer", _resultsBuffer);
         Mat.SetBuffer("_DepthData", _depthDataBuffer);
         Mat.SetInt("_SourceImageWidth", _sourceImageWidth);
@@ -116,6 +130,14 @@ public class SuperPixelManager : MonoBehaviour
         Mat.SetInt("_SuperpixelResolution", SuperpixelResolution);
         Mat.SetTexture("_SourceTexture", _sourceTexture);
         Mat.SetBuffer("_DepthMappings", _depthMappingBuffer);
+        Mat.SetBuffer("_CellDepthsBuffer", _cellDepthsBuffer);
+    }
+
+    private void DoClearDepthBuffer()
+    {
+        Compute.SetBuffer(_clearDepthKernel, "_CellDepthsBuffer", _cellDepthsBuffer);
+        int cellThreads = Mathf.CeilToInt(CellCount / GroupSize);
+        Compute.Dispatch(_clearDepthKernel, cellThreads, 1, 1);
     }
 
     private void DoCellSetup()
@@ -123,11 +145,11 @@ public class SuperPixelManager : MonoBehaviour
         Compute.SetInt("_SourceImageWidth", _sourceImageWidth);
         Compute.SetInt("_SourceImageHeight", _sourceImageHeight);
         Compute.SetBuffer(_cellSetupKernel, "_CellStartingPoints", _cellStartingPoints);
-        Compute.SetBuffer(_cellSetupKernel, "_CellSetupBuffer", _cellSetupBuffer);
+        Compute.SetBuffer(_cellSetupKernel, "_CellBasisBuffer", _cellBasisBuffer);
         Compute.SetTexture(_cellSetupKernel, "SourceImage", _sourceTexture);
 
-        int cellSetupThreads = Mathf.CeilToInt(CellCount / GroupSize);
-        Compute.Dispatch(_cellSetupKernel, cellSetupThreads, 1, 1);
+        int cellThreads = Mathf.CeilToInt(CellCount / GroupSize);
+        Compute.Dispatch(_cellSetupKernel, cellThreads, 1, 1);
     }
 
     private void DoPixelAssignment()
@@ -136,8 +158,11 @@ public class SuperPixelManager : MonoBehaviour
         Compute.SetInt("_SourceImageHeight", _sourceImageHeight);
         Compute.SetTexture(_pixelAssignmentKernel, "SourceImage", _sourceTexture);
         Compute.SetBuffer(_pixelAssignmentKernel, "_CellsAroundPixelBuffer", _cellsAroundPixelBuffer);
-        Compute.SetBuffer(_pixelAssignmentKernel, "_CellSetupBuffer", _cellSetupBuffer);
+        Compute.SetBuffer(_pixelAssignmentKernel, "_CellBasisBuffer", _cellBasisBuffer);
         Compute.SetBuffer(_pixelAssignmentKernel, "_ResultsBuffer", _resultsBuffer);
+        Compute.SetBuffer(_pixelAssignmentKernel, "_DepthMappings", _depthMappingBuffer);
+        Compute.SetBuffer(_pixelAssignmentKernel, "_DepthData", _depthDataBuffer);
+        Compute.SetBuffer(_pixelAssignmentKernel, "_CellDepthsBuffer", _cellDepthsBuffer);
 
         int pixelAssignmentThreads = Mathf.CeilToInt(SourceImageResolution / GroupSize);
         Compute.Dispatch(_pixelAssignmentKernel, pixelAssignmentThreads, 1, 1);
@@ -193,9 +218,10 @@ public class SuperPixelManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        _cellSetupBuffer.Release();
+        _cellBasisBuffer.Release();
         _cellStartingPoints.Release();
         _cellsAroundPixelBuffer.Release();
         _depthMappingBuffer.Release();
+        _cellDepthsBuffer.Release();
     }
 }

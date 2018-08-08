@@ -1,7 +1,11 @@
 ﻿#pragma kernel CellSetup
 #pragma kernel PixelAssignment
+#pragma kernel ClearDepthData
 
-struct CellSetupData
+#define DepthImageWidth 512
+#define DepthImageHeight 424
+
+struct CellBasisData
 {
 	float3 Color;
 	float2 Pos;
@@ -10,7 +14,7 @@ struct CellSetupData
 int _SourceImageWidth;
 int _SourceImageHeight;
 
-RWStructuredBuffer<CellSetupData> _CellSetupBuffer;
+RWStructuredBuffer<CellBasisData> _CellBasisBuffer;
 RWStructuredBuffer<float2> _CellStartingPoints;
 Texture2D SourceImage;
 SamplerState samplerSourceImage;
@@ -25,10 +29,10 @@ void CellSetup (uint3 id : SV_DispatchThreadID)
 
 	//TODO: Sample neighbors and ease it away from edges.
 
-	CellSetupData ret;
+	CellBasisData ret;
 	ret.Color = val.xyz; 
 	ret.Pos = uvs;
-	_CellSetupBuffer[id.x] = ret;
+	_CellBasisBuffer[id.x] = ret;
 }
 
 struct CellsAroundPixel
@@ -48,18 +52,29 @@ float2 IndexToUvs(uint index)
 	return float2(retX, retY);
 }
 
-float GetDist(float2 pixelPos, float3 pixelVal, CellSetupData cellData)
+float GetDist(float2 pixelPos, float3 pixelVal, CellBasisData cellData)
 {
 	float pixelDist = length(pixelVal - cellData.Color);
 	pixelDist = pow(pixelDist, 1);
 	float posDist = length(pixelPos - cellData.Pos);
-	return  posDist + pixelDist; // TODO: tune this relationship;
+	return  posDist + pixelDist;
 }
 
-[numthreads(64, 1, 1)]
-void CellDepthAverage(uint3 id : SV_DispatchThreadID)
+struct CellDepthData
 {
-	// Sample the 
+	int TotalDepth;
+	int PixelsInCell;
+};
+
+RWStructuredBuffer<CellDepthData> _CellDepthsBuffer;
+Buffer<float2> _DepthMappings;
+Buffer<int> _DepthData;
+
+int UvsToDepthImageIndex(float2 uv)
+{
+	int x = uv.x * DepthImageWidth;
+	int y = uv.y * DepthImageHeight;
+	return x + y * DepthImageWidth;
 }
 
 [numthreads(64, 1, 1)]
@@ -73,7 +88,7 @@ void PixelAssignment(uint3 id : SV_DispatchThreadID)
 	for (int i = 0; i < 9; i++)
 	{
 		int cellIndex = cellsAroundMe.Cells[i];
-		CellSetupData cellData = _CellSetupBuffer[cellIndex];
+		CellBasisData cellData = _CellBasisBuffer[cellIndex];
 		float dist = GetDist(uvs, pixelVal.xyz, cellData);
 		if (dist < closestDist)
 		{
@@ -82,4 +97,22 @@ void PixelAssignment(uint3 id : SV_DispatchThreadID)
 		}
 	}
 	_ResultsBuffer[id.x] = winningCell;
+
+	float2 mappedDepthCoords = _DepthMappings[id.x] / float2(DepthImageWidth, DepthImageHeight);
+	int depthIndex = UvsToDepthImageIndex(mappedDepthCoords);
+	int depthVal = _DepthData[depthIndex];
+
+	if (depthVal > 0)
+	{
+		//depthVal /= 100; // TODO: Depth val is going to blow out, so figure out an intelligent way to handle this.
+		InterlockedAdd(_CellDepthsBuffer[winningCell].TotalDepth, depthVal);
+		InterlockedAdd(_CellDepthsBuffer[winningCell].PixelsInCell, 1);
+	}
+}
+
+
+[numthreads(64, 1, 1)]
+void ClearDepthData(uint3 id : SV_DispatchThreadID)
+{
+	_CellDepthsBuffer[id.x] = (CellDepthData)0;
 }

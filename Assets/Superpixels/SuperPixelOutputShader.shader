@@ -31,12 +31,19 @@
 				float4 vertex : SV_POSITION;
 			};
 
-			struct CellSetupData
+			struct CellBasisData
 			{
 				float3 Color;
 				float2 Pos;
 			};
-			StructuredBuffer<CellSetupData> _CellSetupBuffer;
+
+			struct CellDepthData
+			{
+				int TotalDepth;
+				int PixelsInCell;
+			};
+
+			StructuredBuffer<CellBasisData> _CellBasisBuffer;
 
 			sampler2D _SourceTexture;
 			float _MaxDepth;
@@ -48,6 +55,7 @@
 
 			Buffer<float2> _DepthMappings;
 			Buffer<int> _DepthData;
+			StructuredBuffer<CellDepthData> _CellDepthsBuffer;
 			
 			v2f vert (appdata v)
 			{
@@ -80,14 +88,14 @@
 				return x + y * 512;
 			}
 
-			CellSetupData GetCell(float2 uv)
+			CellBasisData GetCell(float2 uv)
 			{
 				int pixelIndex = UvsToSourceImageIndex(uv);
 				int cellIndex = _ResultsBuffer[pixelIndex];
-				return _CellSetupBuffer[cellIndex];
+				return _CellBasisBuffer[cellIndex];
 			}
 
-			float GetDepth(float2 uv)
+			float GetPixelDepth(float2 uv)
 			{
 				int depthIndex = UvsToSourceImageIndex(uv);
 				float2 newCoords = _DepthMappings[depthIndex] / float2(512, 424);
@@ -99,19 +107,23 @@
 
 			float3 GetMoneyMelon(float2 uv)
 			{
-				CellSetupData cell = GetCell(uv);
-				float depth = GetDepth(cell.Pos);
+				int pixelIndex = UvsToSourceImageIndex(uv);
+				int cellIndex = _ResultsBuffer[pixelIndex];
+				CellDepthData cellDepth = _CellDepthsBuffer[cellIndex];
+
+				float depth = cellDepth.TotalDepth / cellDepth.PixelsInCell;
+				return depth / _MaxDepth;
 				if (depth > _DepthThreshold || depth == 0)
 				{
 					return float3(1, 0, 0);
 				}
-				return tex2D(_SourceTexture, uv).rgb;
+				return tex2D(_SourceTexture, uv).rgb; 
 			}
 
 			float3 Control(float2 uv)
 			{
 				float3 sourceTex = tex2D(_SourceTexture, uv).rgb;
-				float depth = GetDepth(uv);
+				float depth = GetPixelDepth(uv);
 
 				if (depth > _DepthThreshold || depth == 0)
 				{
