@@ -12,3 +12,5 @@
 /.vs/
 /Unity.PackageManagerUI.Editor.csproj
 *.csproj
+/Frames
+/VideoFootageSetup
